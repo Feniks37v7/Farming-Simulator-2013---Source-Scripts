@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    ============================================================================
+    glowShader.xml  -  wersja dla Farming Simulator 2013 (GIANTS Engine 5.0)
+    ============================================================================
+    Port shadera glowShader z FS25 (CustomShader version="5") na format FS13
+    (CustomShader version="2").
+
+    Obslugiwany jest WYLACZNIE wariant "slider" - pozostale warianty z FS25
+    (sineFloatingAnimation, loadingCircle, loadingBar, multiType, staticLight,
+    blink, fresnel, billboard, pulseNoise, customEmissiveMap itd.) zostaly
+    pominiete, bo w FS13 format "version=2" nie zna mechanizmu <Variations>.
+
+    Odpowiednik wariantu "slider" z FS25:
+
+        float mask = float(In.vs.albedoMapTexCoord2.x <=
+                           (object.sliderPos.x + frac(object.sliderPos.y * cTime_s)));
+        globals.gAlpha             = mask;
+        globals.gEmissiveColor.w  *= mask;
+
+    czyli: swiecenie widac tylko tam, gdzie wspolrzedna "suwaka" jest mniejsza
+    lub rowna (pozycja suwaka + automatyczne przewijanie w czasie).
+
+    W FS13 mase przekazujemy z vertex shadera do pixel shadera jako dodatkowe
+    interpolanty (TEXCOORDn), a nastepnie mnozymy przez nia kolor koncowy
+    (oColor) w FINAL_POS_FS - patrz README.
+    ============================================================================
+-->
+<CustomShader version="2" classRequirement="">
+    <LodLevel startDistance="0">
+        <Parameters>
+            <!-- lightControl.x : intensywnosc swiecenia (1.0 = normalnie, 0.0 = zgaszone) -->
+            <Parameter name="lightControl" target="lightControl" type="float4" defaultValue="1.0 0.0 0.0 0.0"/>
+            <!-- sliderPos.x   : pozycja suwaka 0..1
+                 sliderPos.y   : predkosc automatycznego przesuwania (0 = brak)
+                 sliderPos.z/w : nieuzywane (rezerwa) -->
+            <Parameter name="sliderPos"    target="sliderPos"    type="float4" defaultValue="1.0 0.0 0.0 0.0"/>
+        </Parameters>
+        <CodeInjections>
+
+            <!-- 1) Deklaracje uniformow (parametrow materialu) -->
+            <CodeInjection position="MATERIALINFO">
+<![CDATA[
+float4 lightControl;
+float4 sliderPos;
+]]>
+            </CodeInjection>
+
+            <!-- 2) Dodatkowe dane przekazywane z vertex shadera do pixel shadera -->
+            <CodeInjection position="VS_OUTPUT">
+<![CDATA[
+float mSliderCoord     : TEXCOORDn;
+float mSliderThreshold : TEXCOORDn;
+]]>
+            </CodeInjection>
+
+            <!-- 3) Wyliczenie pozycji suwaka (raz na wierzcholek) -->
+            <CodeInjection position="POST_SET_TEXCOORDS_VS">
+<![CDATA[
+{
+    // 3a. pozycja suwaka + automatyczne przewijanie w czasie
+    //     (odpowiednik frac(object.sliderPos.y * cTime_s) z FS25)
+    float mSliderOffset  = sliderPos.y * time.y;
+    mSliderOffset       -= floor(mSliderOffset);            // = frac()
+
+    Out.mSliderThreshold = sliderPos.x + mSliderOffset;
+
+    // 3b. wspolrzedna wzdluz paska swiecenia.
+    //     FS13 nie ma drugiego zestawu UV (uv1), dlatego uzywamy
+    //     wspolrzednej X podstawowego UV mesha (0..1 wzdluz paska).
+    float2 mSliderUV = getTexCoords(In, ALBEDOMAP_TEXCOORD);
+    Out.mSliderCoord = mSliderUV.x;
+}
+]]>
+            </CodeInjection>
+
+            <!-- 4) Maska w pixel shaderze - gasi swiecenie poza suwakiem -->
+            <CodeInjection position="FINAL_POS_FS">
+<![CDATA[
+// Nazwy interpolantow z VS_OUTPUT.
+// Jesli Twoja wersja silnika FS13 nazywa strukture inaczej (np. In.mSliderCoord),
+// wystarczy podmienic te dwie linie - patrz sekcja "Rozwiazywanie problemow" w README.
+#define GS_SLIDER_COORD     In.vs.mSliderCoord
+#define GS_SLIDER_THRESHOLD In.vs.mSliderThreshold
+
+{
+    // twarda maska 0/1 - dokladnie jak warunek "<= sliderPos.x + frac(...)" w FS25
+    float mSliderMask = (GS_SLIDER_COORD <= GS_SLIDER_THRESHOLD) ? 1.0 : 0.0;
+
+    // ------------------------------------------------------------------
+    // WARIANT ZAPASOWY - tylko jesli silnik FS13 nie obsluguje VS_OUTPUT.
+    // Wtedy: usun blok VS_OUTPUT oraz blok POST_SET_TEXCOORDS_VS z tego pliku,
+    // a linijke z mSliderMask powyzej zastap trzema liniami ponizej:
+    //
+    //   float2 mSliderUV  = getTexCoords(In, ALBEDOMAP_TEXCOORD);
+    //   float  mThreshold = sliderPos.x + frac(sliderPos.y * time.y);
+    //   float  mSliderMask = (mSliderUV.x <= mThreshold) ? 1.0 : 0.0;
+    // ------------------------------------------------------------------
+
+    // 1.0 = normalne swiecenie, 0.0 = zgaszone
+    float mGlowScale  = saturate(lightControl.x);
+
+    oColor.rgb *= mSliderMask * mGlowScale;
+
+#ifdef ALPHA_BLENDED
+    // w materialach z alphaBlending czesc "zgaszona" musi byc w pelni przezroczysta
+    oColor.a *= mSliderMask;
+#endif
+}
+]]>
+            </CodeInjection>
+        </CodeInjections>
+    </LodLevel>
+</CustomShader>
